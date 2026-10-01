@@ -1,34 +1,11 @@
 import { SymbolView } from "expo-symbols";
-import { Pressable, Text, View } from "react-native";
+import { Pressable, ScrollView, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { transaccionesPrueba } from "../data/transaccionesPrueba";
 import CardTransaccion from "../ui/components/cardTransaccion";
 
 export default function Inicio() {
   const name = "Usuario";
-  const transaccionData = [
-    {
-      id: "1",
-      icon: {
-        android: "work",
-        web: "work",
-      } as const,
-      name: "Nómina",
-      type: "Ingreso" as const,
-      amount: 1000,
-      date: "12 feb 2026",
-    },
-    {
-      id: "2",
-      icon: {
-        android: "local_gas_station",
-        web: "local_gas_station",
-      } as const,
-      name: "Gasolina",
-      type: "Egreso" as const,
-      amount: 500,
-      date: "16 feb 2026",
-    },
-  ];
 
   return (
     <SafeAreaView className="flex-1 bg-[#f7f4f4] dark:bg-[#141313]">
@@ -88,11 +65,15 @@ export default function Inicio() {
           Movimientos Recientes
         </Text>
       </View>
-      <View className="flex-1 rounded-[10px] mx-5 my-4 bg-[#fff] dark:bg-[#0f172a]">
-        {transaccionData.map((transaccion) => (
+      <ScrollView
+        className="mx-5 mt-3 flex-1"
+        contentContainerStyle={{ paddingBottom: 100 }}
+        showsVerticalScrollIndicator={false}
+      >
+        {transaccionesPrueba.map((transaccion) => (
           <CardTransaccion key={transaccion.id} dataCard={transaccion} />
         ))}
-      </View>
+      </ScrollView>
 
       {/* Botón flotante para agregar un movimiento */}
       <Pressable

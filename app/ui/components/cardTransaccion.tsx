@@ -1,16 +1,8 @@
+import { Transaccion } from "@/app/data/types/transaccion";
 import { SymbolView } from "expo-symbols";
-import type { ComponentProps } from "react";
 import { Text, View } from "react-native";
-
 type CardTransaccionProps = {
-  dataCard: {
-    id: string;
-    icon: ComponentProps<typeof SymbolView>["name"];
-    name: string;
-    type: "Ingreso" | "Gasto";
-    amount: number;
-    date: string;
-  };
+  dataCard: Transaccion;
 };
 
 export default function CardTransaccion({ dataCard }: CardTransaccionProps) {
