@@ -29,7 +29,7 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
-        name="transactions"
+        name="stats"
         options={{
           title: "Movimientos",
           tabBarIcon: ({ color }) => (

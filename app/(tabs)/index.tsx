@@ -1,12 +1,14 @@
 import { SymbolView } from "expo-symbols";
+import { useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { transaccionesPrueba } from "../data/transaccionesPrueba";
 import CardTransaccion from "../ui/components/cardTransaccion";
+import ModalCreateFinances from "../ui/components/modalCreateFinances";
 
 export default function Inicio() {
   const name = "Usuario";
-
+  const [modalVisble, setModalVisible] = useState(false);
   return (
     <SafeAreaView className="flex-1 bg-[#f7f4f4] dark:bg-[#141313]">
       {/* Header bienvenida */}
@@ -78,14 +80,18 @@ export default function Inicio() {
       {/* Botón flotante para agregar un movimiento */}
       <Pressable
         className="absolute bottom-5 right-5 z-10 h-14 w-14 items-center justify-center rounded-full bg-emerald-500"
-        onPress={() => {
-          console.log("Agregar movimiento");
-        }}
+        onPress={() => setModalVisible(true)}
       >
         <Text className="font-manrope text-[32px] leading-none text-white">
           +
         </Text>
       </Pressable>
+
+      {/* Modal Create */}
+      <ModalCreateFinances
+        modalVisible={modalVisble}
+        onClose={() => setModalVisible(false)}
+      />
     </SafeAreaView>
   );
 }
