@@ -1,14 +1,20 @@
 /** @type {import('tailwindcss').Config} */
 module.exports = {
-  content: ["./app/**/*.{js,jsx,ts,tsx}", "./components/**/*.{js,jsx,ts,tsx}"],
+  content: [
+    "./app/**/*.{js,jsx,ts,tsx}",
+    "./ui/**/*.{js,jsx,ts,tsx}", // 👈 NUEVO
+    "./components/**/*.{js,jsx,ts,tsx}", // 👈 NUEVO
+    "./data/**/*.{js,jsx,ts,tsx}", // 👈 por si acaso
+    "./hooks/**/*.{js,jsx,ts,tsx}", // 👈 NUEVO
+    "./context/**/*.{js,jsx,ts,tsx}", // 👈 NUEVO
+  ],
   presets: [require("nativewind/preset")],
   theme: {
     extend: {
       fontFamily: {
-        manrope: ["Manrope_400Regular"],
-        "manrope-medium": ["Manrope_500Medium"],
-        "manrope-semibold": ["Manrope_600SemiBold"],
-        "manrope-bold": ["Manrope_700Bold"],
+        manrope: ["Manrope"],
+        "manrope-bold": ["Manrope-Bold"],
+        "manrope-medium": ["Manrope-Medium"],
       },
     },
   },

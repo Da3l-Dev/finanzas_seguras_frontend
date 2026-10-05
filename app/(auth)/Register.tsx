@@ -1,4 +1,6 @@
 import { useAuth } from "@/context/AuthContext";
+import type { SymbolName } from "@/data/types/symbols";
+import { ApiError } from "@/lib/api";
 import {
   formatPhone,
   validateEmail,
@@ -22,7 +24,6 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import type { SymbolName } from "../data/types/cuentas";
 
 export default function Register() {
   const { signUp } = useAuth();
@@ -37,8 +38,11 @@ export default function Register() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
+  const [serverFieldErrors, setServerFieldErrors] = useState<
+    Record<string, string>
+  >({});
 
-  // Validaciones en tiempo real (solo si el campo tiene contenido)
+  // Validaciones locales en tiempo real (solo si el campo tiene contenido)
   const errors = useMemo(
     () => ({
       email: email.length > 0 ? validateEmail(email) : null,
@@ -50,7 +54,6 @@ export default function Register() {
     [email, phone, password, firstName, lastName],
   );
 
-  // ¿Todo listo para enviar?
   const formValido =
     !validateEmail(email) &&
     !validatePhone(phone) &&
@@ -58,9 +61,20 @@ export default function Register() {
     !validateFirstName(firstName) &&
     !validateLastName(lastName);
 
+  // Limpia el error de servidor de un campo cuando el usuario escribe
+  const clearFieldError = (field: string) => {
+    setServerFieldErrors((prev) => {
+      if (!prev[field]) return prev;
+      const next = { ...prev };
+      delete next[field];
+      return next;
+    });
+  };
+
   const handleRegister = async () => {
     if (!formValido || loading) return;
     setServerError(null);
+    setServerFieldErrors({});
     setLoading(true);
 
     try {
@@ -72,9 +86,37 @@ export default function Register() {
         lastName: lastName.trim(),
         displayName: displayName.trim() || firstName.trim(),
       });
-      router.replace("/(tabs)");
-    } catch (e: any) {
-      setServerError(e?.message ?? "Error al crear la cuenta");
+      router.replace("/onboarding/telegram");
+    } catch (e) {
+      if (e instanceof ApiError) {
+        const body = e.body as { errors?: Record<string, string[]> } | null;
+        const fieldErrors = body?.errors;
+
+        // Mapear errores por campo
+        if (fieldErrors) {
+          const mapped: Record<string, string> = {};
+          for (const [key, msgs] of Object.entries(fieldErrors)) {
+            if (msgs?.[0]) mapped[key] = msgs[0];
+          }
+          setServerFieldErrors(mapped);
+        }
+
+        // Mensaje general: prioriza el específico si hay uno
+        const specific =
+          fieldErrors?.email?.[0] ??
+          fieldErrors?.phone?.[0] ??
+          fieldErrors?.password?.[0] ??
+          fieldErrors?.firstName?.[0] ??
+          fieldErrors?.lastName?.[0] ??
+          fieldErrors?.general?.[0] ??
+          e.message;
+
+        setServerError(specific);
+      } else if (e instanceof Error) {
+        setServerError(e.message);
+      } else {
+        setServerError("Error al crear la cuenta");
+      }
     } finally {
       setLoading(false);
     }
@@ -114,8 +156,11 @@ export default function Register() {
               icon={{ android: "mail", web: "mail" }}
               placeholder="tu@email.com"
               value={email}
-              onChangeText={setEmail}
-              error={errors.email}
+              onChangeText={(t) => {
+                setEmail(t);
+                clearFieldError("email");
+              }}
+              error={errors.email ?? serverFieldErrors.email ?? null}
               keyboardType="email-address"
               autoCapitalize="none"
             />
@@ -124,8 +169,11 @@ export default function Register() {
               icon={{ android: "phone", web: "phone" }}
               placeholder="771 444 1450"
               value={phone}
-              onChangeText={(t) => setPhone(formatPhone(t))}
-              error={errors.phone}
+              onChangeText={(t) => {
+                setPhone(formatPhone(t));
+                clearFieldError("phone");
+              }}
+              error={errors.phone ?? serverFieldErrors.phone ?? null}
               keyboardType="phone-pad"
             />
 
@@ -133,8 +181,11 @@ export default function Register() {
               icon={{ android: "lock", web: "lock" }}
               placeholder="Contraseña"
               value={password}
-              onChangeText={setPassword}
-              error={errors.password}
+              onChangeText={(t) => {
+                setPassword(t);
+                clearFieldError("password");
+              }}
+              error={errors.password ?? serverFieldErrors.password ?? null}
               secureTextEntry={!showPassword}
               rightIcon={
                 showPassword
@@ -145,26 +196,34 @@ export default function Register() {
             />
 
             {/* Hint de password */}
-            {!errors.password && password.length > 0 && (
-              <Text className="ml-1 font-manrope text-[11px] text-emerald-500">
-                ✓ Contraseña segura
-              </Text>
-            )}
+            {!errors.password &&
+              !serverFieldErrors.password &&
+              password.length > 0 && (
+                <Text className="ml-1 font-manrope text-[11px] text-emerald-500">
+                  ✓ Contraseña segura
+                </Text>
+              )}
 
             <FieldInput
               icon={{ android: "badge", web: "badge" }}
               placeholder="Nombre"
               value={firstName}
-              onChangeText={setFirstName}
-              error={errors.firstName}
+              onChangeText={(t) => {
+                setFirstName(t);
+                clearFieldError("firstName");
+              }}
+              error={errors.firstName ?? serverFieldErrors.firstName ?? null}
             />
 
             <FieldInput
               icon={{ android: "badge", web: "badge" }}
               placeholder="Apellido"
               value={lastName}
-              onChangeText={setLastName}
-              error={errors.lastName}
+              onChangeText={(t) => {
+                setLastName(t);
+                clearFieldError("lastName");
+              }}
+              error={errors.lastName ?? serverFieldErrors.lastName ?? null}
             />
 
             <FieldInput
@@ -175,7 +234,7 @@ export default function Register() {
             />
           </View>
 
-          {/* Error del servidor */}
+          {/* Error general del servidor */}
           {serverError && (
             <View className="mx-6 mt-4 flex-row items-center gap-2 rounded-2xl bg-rose-50 px-4 py-3 dark:bg-rose-950/30">
               <SymbolView
@@ -213,7 +272,7 @@ export default function Register() {
             <Text className="font-manrope text-[13px] text-slate-500">
               ¿Ya tienes cuenta?{" "}
             </Text>
-            <Pressable onPress={() => router.replace("/Login")}>
+            <Pressable onPress={() => router.replace("/(auth)/Login")}>
               <Text className="font-manrope-bold text-[13px] text-emerald-500">
                 Inicia sesión
               </Text>

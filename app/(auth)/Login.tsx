@@ -1,4 +1,5 @@
 import { useAuth } from "@/context/AuthContext";
+import { ApiError } from "@/lib/api";
 import { router } from "expo-router";
 import { SymbolView } from "expo-symbols";
 import { useState } from "react";
@@ -31,12 +32,17 @@ export default function Login() {
       await signIn(email.trim(), password);
       router.replace("/(tabs)");
     } catch (e) {
-      setError("Credenciales incorrectas");
+      if (e instanceof ApiError) {
+        setError(`[${e.status}] ${e.message}`);
+      } else if (e instanceof Error) {
+        setError(e.message);
+      } else {
+        setError("Error desconocido");
+      }
     } finally {
       setLoading(false);
     }
   };
-
   const deshabilitado = loading || !email.trim() || !password;
 
   return (

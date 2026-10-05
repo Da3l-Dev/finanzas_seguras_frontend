@@ -23,7 +23,6 @@ SplashScreen.preventAutoHideAsync();
 export default function RootLayout() {
   const [loaded, error] = useFonts({
     "SpaceMono-Regular": require("../assets/fonts/SpaceMono-Regular.ttf"),
-    // tus Manrope si los tienes
   });
 
   useEffect(() => {
@@ -54,21 +53,29 @@ function RootLayoutNav() {
   useEffect(() => {
     if (isLoading) return;
 
-    // Rutas de autenticación: ajusta según TU estructura
-    const enAuth = segments[0] === "Login" || segments[0] === "(auth)";
+    // El grupo "(auth)" es el que contiene Login y Register
+    const enAuth = segments[0] === "(auth)";
 
     if (!user && !enAuth) {
-      router.replace("/Login"); // 👈 con mayúscula, como tu archivo
+      router.replace("/(auth)/Login");
     } else if (user && enAuth) {
       router.replace("/(tabs)");
     }
-  }, [user, isLoading, segments]);
+  }, [user, isLoading, segments, router]);
 
   return (
     <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
       <Stack screenOptions={{ headerShown: false }}>
-        <Stack.Screen name="Login" /> {/* 👈 mayúscula */}
+        {/* El grupo (auth) contiene Login y Register */}
+        <Stack.Screen name="(auth)" />
+
+        {/* Las tabs */}
         <Stack.Screen name="(tabs)" />
+
+        {/* Resto de rutas */}
+        <Stack.Screen name="onboarding/telegram" />
+        <Stack.Screen name="settings/telegram" />
+        <Stack.Screen name="modal" options={{ presentation: "modal" }} />
       </Stack>
     </ThemeProvider>
   );

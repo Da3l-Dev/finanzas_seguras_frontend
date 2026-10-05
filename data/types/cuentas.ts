@@ -2,7 +2,12 @@ import type { SymbolViewProps } from "expo-symbols";
 
 export type SymbolName = SymbolViewProps["name"];
 
-export type CuentaTipo = "CASH" | "DEBIT_CARD" | "CREDIT_CARD" | "SAVINGS";
+export type CuentaTipo =
+  | "CASH"
+  | "DEBIT_CARD"
+  | "CREDIT_CARD"
+  | "SAVINGS"
+  | "INVESTMENT";
 
 export type Cuenta = {
   id: string;

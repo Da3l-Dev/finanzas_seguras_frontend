@@ -1,10 +1,25 @@
 import { useColorScheme } from "@/components/useColorScheme";
-import { Tabs } from "expo-router";
+import { useAuth } from "@/context/AuthContext";
+import { Tabs, router } from "expo-router";
 import { SymbolView } from "expo-symbols";
+import { useEffect } from "react";
 import "../../global.css";
 
 export default function TabLayout() {
+  const { user, isLoading } = useAuth();
   const colorScheme = useColorScheme();
+
+  // Guard de auth: en useEffect, jamás en el render
+  useEffect(() => {
+    if (isLoading) return;
+    if (!user) {
+      router.replace("/(auth)/Login");
+    }
+  }, [user, isLoading]);
+
+  if (isLoading) return null;
+
+  if (!user) return null;
 
   return (
     <Tabs

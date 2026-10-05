@@ -1,6 +1,7 @@
-import { Transaccion } from "@/app/data/types/transaccion";
+import { Transaccion } from "@/data/types/transaccion";
 import { SymbolView } from "expo-symbols";
 import { Text, View } from "react-native";
+import "../../global.css";
 type CardTransaccionProps = {
   dataCard: Transaccion;
 };
