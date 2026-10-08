@@ -1,7 +1,9 @@
 import { useAuth } from "@/context/AuthContext";
-import { ApiError, apiFetch } from "@/lib/api";
+import { useStats } from "@/hooks/queries/useDashboard";
+import { toIconName } from "@/lib/icons";
+import { getQueryErrorMessage } from "@/lib/queryUtils";
 import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
-import { useCallback, useEffect, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -53,13 +55,24 @@ const PERIODOS: { value: Periodo; label: string }[] = [
   { value: "AÑO", label: "Año" },
 ];
 
+// Paleta amplia: hasta 16 categorías sin repetir
 const COLORES = [
-  "#10b981",
-  "#3b82f6",
-  "#f43f5e",
-  "#f59e0b",
-  "#8b5cf6",
-  "#06b6d4",
+  "#10b981", // emerald
+  "#3b82f6", // blue
+  "#f43f5e", // rose
+  "#f59e0b", // amber
+  "#8b5cf6", // violet
+  "#06b6d4", // cyan
+  "#ec4899", // pink
+  "#14b8a6", // teal
+  "#f97316", // orange
+  "#84cc16", // lime
+  "#a855f7", // purple
+  "#0ea5e9", // sky
+  "#ef4444", // red
+  "#22c55e", // green
+  "#eab308", // yellow
+  "#6366f1", // indigo
 ];
 
 // ═══════════════════════════════════════════════════════════════
@@ -97,7 +110,52 @@ function tituloGrafica(p: Periodo): string {
   }
 }
 
-const ICON_FALLBACK = "shape";
+/**
+ * Asigna un color único a cada categoría.
+ * - Respeta `cat.color` si no genera conflicto con otro ya usado.
+ * - Si el color está repetido o no existe, toma el siguiente de la paleta no usado.
+ * - Devuelve un Map<categoryId, color> consistente para toda la pantalla.
+ */
+function asignarColoresUnicos(
+  categorias: CategoriaStat[],
+): Map<string, string> {
+  const mapa = new Map<string, string>();
+  const usados = new Set<string>();
+  let paletaIndex = 0;
+
+  for (const cat of categorias) {
+    const normalizado = cat.color?.toLowerCase().trim() ?? null;
+
+    // 1) Si tiene color propio y no está repetido, lo respetamos
+    if (normalizado && !usados.has(normalizado)) {
+      mapa.set(cat.categoryId, cat.color!);
+      usados.add(normalizado);
+      continue;
+    }
+
+    // 2) Buscamos el siguiente color de la paleta que no esté en uso
+    let asignado: string | null = null;
+    for (let i = 0; i < COLORES.length; i++) {
+      const candidato = COLORES[(paletaIndex + i) % COLORES.length];
+      if (!usados.has(candidato.toLowerCase())) {
+        asignado = candidato;
+        paletaIndex = (paletaIndex + i + 1) % COLORES.length;
+        break;
+      }
+    }
+
+    // 3) Si ya se usaron todos (poco probable), ciclamos
+    if (!asignado) {
+      asignado = COLORES[paletaIndex % COLORES.length];
+      paletaIndex++;
+    }
+
+    mapa.set(cat.categoryId, asignado);
+    usados.add(asignado.toLowerCase());
+  }
+
+  return mapa;
+}
 
 // ═══════════════════════════════════════════════════════════════
 // Pantalla
@@ -105,65 +163,23 @@ const ICON_FALLBACK = "shape";
 export default function Stats() {
   const { token, isLoading: authLoading } = useAuth();
   const [periodo, setPeriodo] = useState<Periodo>("MES");
-  const [data, setData] = useState<StatsData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const {
+    data,
+    isPending: loading,
+    isRefetching: refreshing,
+    error: queryError,
+    refetch,
+  } = useStats(periodo);
+  const error = queryError ? getQueryErrorMessage(queryError) : null;
+  const cargar = (_periodo?: Periodo, _refresh?: boolean) => {
+    void refetch();
+  };
 
-  const cargar = useCallback(
-    async (periodoActual: Periodo, isRefresh = false) => {
-      if (!token) return;
-      if (isRefresh) setRefreshing(true);
-      else setLoading(true);
-      setError(null);
-
-      try {
-        const res = await apiFetch<{ success: boolean; data: StatsData }>(
-          `/api/stats/summary?period=${periodoActual}`,
-          { method: "GET" },
-          token,
-        );
-        setData(res.data);
-      } catch (e) {
-        if (e instanceof ApiError) setError(e.message);
-        else if (e instanceof Error) setError(e.message);
-        else setError("No se pudieron cargar las estadísticas.");
-      } finally {
-        setLoading(false);
-        setRefreshing(false);
-      }
-    },
-    [token],
+  // Mapa de colores únicos por categoría (consistente en toda la pantalla)
+  const coloresCategorias = useMemo(
+    () => asignarColoresUnicos(data?.categorias ?? []),
+    [data?.categorias],
   );
-
-  useEffect(() => {
-    if (authLoading || !token) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        setLoading(true);
-        const res = await apiFetch<{ success: boolean; data: StatsData }>(
-          `/api/stats/summary?period=${periodo}`,
-          { method: "GET" },
-          token,
-        );
-        if (!cancelled) {
-          setData(res.data);
-          setError(null);
-        }
-      } catch (e) {
-        if (!cancelled) {
-          if (e instanceof ApiError) setError(e.message);
-          else if (e instanceof Error) setError(e.message);
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [token, authLoading, periodo]);
 
   // ============ Loading inicial ============
   if (authLoading || (loading && !data)) {
@@ -451,7 +467,9 @@ export default function Stats() {
                 const pct = (cat.total / maxCategoria) * 100;
                 const pctDelTotal =
                   totalCategorias > 0 ? (cat.total / totalCategorias) * 100 : 0;
-                const color = cat.color ?? COLORES[i % COLORES.length];
+                const color =
+                  coloresCategorias.get(cat.categoryId) ??
+                  COLORES[i % COLORES.length];
                 return (
                   <View key={cat.categoryId}>
                     <View className="mb-2 flex-row items-center justify-between">
@@ -461,7 +479,7 @@ export default function Stats() {
                           className="h-7 w-7 items-center justify-center rounded-full"
                         >
                           <MaterialCommunityIcons
-                            name={(cat.icon as any) ?? ICON_FALLBACK}
+                            name={toIconName(cat.icon)}
                             size={14}
                             color={color}
                           />
@@ -505,7 +523,9 @@ export default function Stats() {
                   key={cat.categoryId}
                   style={{
                     width: `${(cat.total / totalCategorias) * 100}%`,
-                    backgroundColor: cat.color ?? COLORES[i % COLORES.length],
+                    backgroundColor:
+                      coloresCategorias.get(cat.categoryId) ??
+                      COLORES[i % COLORES.length],
                   }}
                   className="h-full"
                 />
@@ -520,7 +540,9 @@ export default function Stats() {
                 >
                   <View
                     style={{
-                      backgroundColor: cat.color ?? COLORES[i % COLORES.length],
+                      backgroundColor:
+                        coloresCategorias.get(cat.categoryId) ??
+                        COLORES[i % COLORES.length],
                     }}
                     className="h-2 w-2 rounded-full"
                   />

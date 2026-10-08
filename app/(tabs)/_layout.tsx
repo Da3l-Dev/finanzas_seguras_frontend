@@ -1,44 +1,74 @@
 import { useColorScheme } from "@/components/useColorScheme";
 import { useAuth } from "@/context/AuthContext";
+import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 import { Tabs, router } from "expo-router";
-import { SymbolView } from "expo-symbols";
 import { useEffect } from "react";
+import { Platform } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import "../../global.css";
 
+// La barra inferior conserva las rutas originales y muestra las cuatro
+// secciones principales del diseño. Movimientos sigue accesible desde Inicio.
 export default function TabLayout() {
   const { user, isLoading } = useAuth();
-  const colorScheme = useColorScheme();
+  const scheme = useColorScheme();
+  const darkBar = scheme === "dark";
+  const insets = useSafeAreaInsets();
+  // Reservamos espacio para los botones o la barra de gestos de Android.
+  const bottomInset = Math.max(
+    insets.bottom,
+    Platform.OS === "android" ? 12 : 8,
+  );
 
-  // Guard de auth: en useEffect, jamás en el render
   useEffect(() => {
-    if (isLoading) return;
-    if (!user) {
-      router.replace("/(auth)/Login");
-    }
-  }, [user, isLoading]);
+    if (!isLoading && !user) router.replace("/(auth)/Login");
+  }, [isLoading, user]);
 
-  if (isLoading) return null;
-
-  if (!user) return null;
+  if (isLoading || !user) return null;
 
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
+        tabBarHideOnKeyboard: true,
+        tabBarActiveTintColor: darkBar ? "#3DE0A2" : "#07866D",
+        tabBarInactiveTintColor: darkBar ? "#99A5B4" : "#64748B",
+        tabBarStyle: {
+          backgroundColor: darkBar ? "#0D1217" : "#FFFFFF",
+          borderTopColor: darkBar ? "#25303A" : "#E2E8F0",
+          borderTopWidth: 1,
+          height: 58 + bottomInset,
+          paddingTop: 7,
+          paddingBottom: bottomInset,
+        },
+        tabBarLabelStyle: {
+          fontFamily: "Manrope-Medium",
+          fontSize: 11,
+        },
       }}
     >
       <Tabs.Screen
         name="index"
         options={{
           title: "Inicio",
-          tabBarIcon: ({ color }) => (
-            <SymbolView
-              name={{
-                android: "home",
-                web: "home",
-              }}
-              tintColor={color}
-              size={28}
+          tabBarIcon: ({ color, size }) => (
+            <MaterialCommunityIcons
+              name="home-variant-outline"
+              color={color}
+              size={size}
+            />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="account"
+        options={{
+          title: "Cuentas",
+          tabBarIcon: ({ color, size }) => (
+            <MaterialCommunityIcons
+              name="credit-card-outline"
+              color={color}
+              size={size}
             />
           ),
         }}
@@ -46,55 +76,30 @@ export default function TabLayout() {
       <Tabs.Screen
         name="stats"
         options={{
-          title: "Movimientos",
-          tabBarIcon: ({ color }) => (
-            <SymbolView
-              name={{
-                android: "payments",
-                web: "payments",
-              }}
-              tintColor={color}
-              size={28}
+          title: "Estadísticas",
+          tabBarIcon: ({ color, size }) => (
+            <MaterialCommunityIcons
+              name="chart-bar"
+              color={color}
+              size={size}
             />
           ),
         }}
       />
-
-      <Tabs.Screen
-        name="account"
-        options={{
-          title: "Cuentas",
-          tabBarIcon: ({ color }) => (
-            <SymbolView
-              name={{
-                ios: "chevron.left.forwardslash.chevron.right",
-                android: "account_balance_wallet",
-                web: "account_balance_wallet",
-              }}
-              tintColor={color}
-              size={28}
-            />
-          ),
-        }}
-      />
-
       <Tabs.Screen
         name="profile"
         options={{
           title: "Perfil",
-          tabBarIcon: ({ color }) => (
-            <SymbolView
-              name={{
-                ios: "chevron.left.forwardslash.chevron.right",
-                android: "person",
-                web: "person",
-              }}
-              tintColor={color}
-              size={28}
+          tabBarIcon: ({ color, size }) => (
+            <MaterialCommunityIcons
+              name="account-outline"
+              color={color}
+              size={size}
             />
           ),
         }}
       />
+      <Tabs.Screen name="movements" options={{ href: null }} />
     </Tabs>
   );
 }

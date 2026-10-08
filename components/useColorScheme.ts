@@ -1,6 +1,6 @@
-import { useColorScheme as useColorSchemeCore } from "react-native";
+import { useAppTheme } from "@/context/ThemeContext";
 
-export const useColorScheme = () => {
-  const coreScheme = useColorSchemeCore();
-  return coreScheme === "unspecified" ? "light" : coreScheme;
-};
+// Misma apariencia para pantallas y navegación, no solo para el sistema.
+export function useColorScheme() {
+  return useAppTheme().resolvedTheme;
+}

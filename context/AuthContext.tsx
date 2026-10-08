@@ -8,6 +8,7 @@ import {
   useState,
 } from "react";
 import { API_URL, ApiError, apiFetch } from "../lib/api";
+import { queryClient } from "@/lib/queryClient";
 
 // ================== Tipos ==================
 
@@ -15,9 +16,9 @@ export type User = {
   id: string;
   email: string;
   firstName: string;
-  lastName?: string;
-  displayName?: string;
-  phone?: string;
+  lastName?: string | null;
+  displayName?: string | null;
+  phone?: string | null;
 };
 
 export type SignUpData = {
@@ -49,6 +50,7 @@ type AuthContextType = {
   signIn: (email: string, password: string) => Promise<void>;
   signUp: (data: SignUpData) => Promise<void>;
   signOut: () => Promise<void>;
+  updateLocalUser: (changes: Partial<User>) => Promise<void>;
 };
 
 // ================== Context ==================
@@ -86,6 +88,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // ---------- Persistir ----------
   const persistSession = useCallback(
     async (newToken: string, newUser: User) => {
+      void queryClient.cancelQueries();
+      queryClient.clear(); // Nunca conservar datos financieros entre sesiones.
       setToken(newToken);
       setUser(newUser);
       await Promise.all([
@@ -139,15 +143,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [persistSession],
   );
 
+  // Mantener el perfil editado en sesión y en SecureStore.
+  const updateLocalUser = useCallback(async (changes: Partial<User>) => {
+    if (!user) return;
+    const updated = { ...user, ...changes };
+    setUser(updated);
+    await SecureStore.setItemAsync(USER_KEY, JSON.stringify(updated));
+  }, [user]);
+
   // ---------- Logout ----------
   const signOut = useCallback(async () => {
     try {
-      await apiFetch("/api/auth/logout", { method: "POST" }, token);
+      await apiFetch("/api/logout", { method: "POST" }, token);
     } catch (e) {
       if (!(e instanceof ApiError)) {
         console.warn("[Auth] Error en logout remoto:", e);
       }
     }
+    await queryClient.cancelQueries();
+    queryClient.clear();
     setUser(null);
     setToken(null);
     await Promise.all([
@@ -157,8 +171,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [token]);
 
   const value = useMemo(
-    () => ({ user, token, isLoading, signIn, signUp, signOut }),
-    [user, token, isLoading, signIn, signUp, signOut],
+    () => ({ user, token, isLoading, signIn, signUp, signOut, updateLocalUser }),
+    [user, token, isLoading, signIn, signUp, signOut, updateLocalUser],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

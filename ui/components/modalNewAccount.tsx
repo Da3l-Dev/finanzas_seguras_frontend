@@ -1,6 +1,10 @@
 import { useAuth } from "@/context/AuthContext";
 import type { Cuenta, CuentaTipo } from "@/data/types/cuentas";
-import { ApiError, apiFetch } from "@/lib/api";
+import { ApiError } from "@/lib/api";
+import { useCreateAccount, useUpdateAccount, type AccountInput } from "@/hooks/mutations/useFinanceMutations";
+import { getFieldErrors } from "@/lib/queryUtils";
+import type { Account } from "@/hooks/queries/useAccounts";
+import { Alert } from "react-native";
 import { SymbolView } from "expo-symbols";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -20,7 +24,8 @@ import "../../global.css";
 type Props = {
   visible: boolean;
   onClose: () => void;
-  onCrear: (cuenta: Cuenta) => void;
+  onCrear?: (cuenta: Cuenta) => void;
+  editing?: Account | null;
 };
 
 // ═══════════════════════════════════════════════════════════════
@@ -107,7 +112,7 @@ const TIPOS: TipoConfig[] = [
 // ═══════════════════════════════════════════════════════════════
 // Componente
 // ═══════════════════════════════════════════════════════════════
-export default function ModalNewAccount({ visible, onClose, onCrear }: Props) {
+export default function ModalNewAccount({ visible, onClose, onCrear, editing }: Props) {
   const { token } = useAuth();
 
   const [nombre, setNombre] = useState("");
@@ -115,7 +120,12 @@ export default function ModalNewAccount({ visible, onClose, onCrear }: Props) {
   const [institucion, setInstitucion] = useState("");
   const [last4, setLast4] = useState("");
   const [monto, setMonto] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [esPrincipal, setEsPrincipal] = useState(false);
+  const [incluirPatrimonio, setIncluirPatrimonio] = useState(true);
+  const [colorCuenta, setColorCuenta] = useState("#10b981");
+  const createMutation = useCreateAccount();
+  const updateMutation = useUpdateAccount();
+  const loading = createMutation.isPending || updateMutation.isPending;
   const [serverError, setServerError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
@@ -123,6 +133,20 @@ export default function ModalNewAccount({ visible, onClose, onCrear }: Props) {
     () => TIPOS.find((t) => t.value === tipoSel)!,
     [tipoSel],
   );
+
+  useEffect(() => {
+    if (!visible) return;
+    if (editing) {
+      setNombre(editing.name);
+      setTipoSel(editing.type);
+      setInstitucion(editing.institution ?? "");
+      setLast4(editing.lastFourDigits ?? "");
+      setMonto(String(editing.type === "CREDIT_CARD" ? (editing.creditLimit ?? 0) : editing.openingBalance));
+      setEsPrincipal(editing.isDefault);
+      setIncluirPatrimonio(editing.includeInNetWorth);
+      setColorCuenta(editing.color ?? "#10b981");
+    } else reset();
+  }, [visible, editing?.id]);
 
   // Limpia campos que no aplican al cambiar de tipo
   useEffect(() => {
@@ -139,6 +163,9 @@ export default function ModalNewAccount({ visible, onClose, onCrear }: Props) {
     setInstitucion("");
     setLast4("");
     setMonto("");
+    setEsPrincipal(false);
+    setIncluirPatrimonio(true);
+    setColorCuenta("#10b981");
     setServerError(null);
     setFieldErrors({});
   };
@@ -200,16 +227,20 @@ export default function ModalNewAccount({ visible, onClose, onCrear }: Props) {
 
     setServerError(null);
     setFieldErrors({});
-    setLoading(true);
+
 
     try {
       const montoNum = parseFloat(monto.replace(",", ".")) || 0;
 
       // Payload SOLO con lo que aplica
-      const payload: Record<string, unknown> = {
+      const payload: AccountInput = {
         name: nombre.trim(),
         type: tipoSel,
         currency: "MXN",
+        icon: config.icon.android,
+        color: colorCuenta,
+        includeInNetWorth: incluirPatrimonio,
+        isDefault: esPrincipal,
       };
 
       if (config.showInstitution && institucion.trim()) {
@@ -227,43 +258,46 @@ export default function ModalNewAccount({ visible, onClose, onCrear }: Props) {
         payload.creditLimit = montoNum;
       }
 
-      const res = await apiFetch<{
-        success: boolean;
-        data: {
-          id: string;
-          name: string;
-          type: CuentaTipo;
-          openingBalance: number;
-          creditLimit: number | null;
+      if (editing) {
+        const changes = {
+          name: nombre.trim(), type: tipoSel, icon: config.icon.android, color: colorCuenta,
+          institution: config.showInstitution ? (institucion.trim() || null) : null,
+          lastFourDigits: config.showLast4 ? (last4 || null) : null,
+          openingBalance: config.showCreditLimit ? (editing.type === "CREDIT_CARD" ? editing.openingBalance : 0) : montoNum,
+          creditLimit: config.showCreditLimit ? montoNum : null,
+          isDefault: esPrincipal,
+          includeInNetWorth: incluirPatrimonio,
         };
-      }>(
-        "/api/account",
-        {
-          method: "POST",
-          body: JSON.stringify(payload),
-        },
-        token,
-      );
-
-      onCrear({
-        id: res.data.id,
-        name: res.data.name,
-        type: res.data.type,
-        icon: config.icon,
+        await updateMutation.mutateAsync({ id: editing.id, changes });
+        Alert.alert("Listo", "Cuenta actualizada.");
+        reset();
+        onClose();
+        return;
+      }
+      const created = await createMutation.mutateAsync(payload);
+      onCrear?.({
+        id: created.id,
+        name: created.name,
+        type: created.type,
+        icon: config.icon, // 👈 objeto { android, web } para la UI
+        institution: institucion.trim() || null,
+        openingBalance: config.showCreditLimit ? 0 : montoNum,
+        creditLimit: config.showCreditLimit ? montoNum : null,
+        isDefault: esPrincipal,
       } as Cuenta);
 
       reset();
       onClose();
     } catch (e) {
       if (e instanceof ApiError) {
-        const body = e.body as { errors?: Record<string, string> } | null;
-        if (body?.errors) setFieldErrors(body.errors);
+        const fields = getFieldErrors(e);
+        setFieldErrors(fields);
         const specific =
-          body?.errors?.name ??
-          body?.errors?.institution ??
-          body?.errors?.lastFourDigits ??
-          body?.errors?.creditLimit ??
-          body?.errors?.openingBalance ??
+          fields.name ??
+          fields.institution ??
+          fields.lastFourDigits ??
+          fields.creditLimit ??
+          fields.openingBalance ??
           e.message;
         setServerError(specific);
       } else if (e instanceof Error) {
@@ -271,8 +305,6 @@ export default function ModalNewAccount({ visible, onClose, onCrear }: Props) {
       } else {
         setServerError("Error al crear la cuenta");
       }
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -306,10 +338,10 @@ export default function ModalNewAccount({ visible, onClose, onCrear }: Props) {
               showsVerticalScrollIndicator={false}
             >
               <Text className="mb-1 font-manrope-bold text-[18px] text-slate-900 dark:text-white">
-                Nueva cuenta
+                {editing ? "Editar cuenta" : "Nueva cuenta"}
               </Text>
               <Text className="mb-5 font-manrope text-[13px] text-slate-500">
-                Configúrala según el tipo
+                {editing ? "Modifica los datos y el saldo inicial; el saldo actual se recalcula según tus movimientos." : "Configúrala según el tipo"}
               </Text>
 
               {/* Nombre */}
@@ -462,6 +494,35 @@ export default function ModalNewAccount({ visible, onClose, onCrear }: Props) {
                 </>
               )}
 
+              <Text className="mb-2 font-manrope-medium text-[12px] text-slate-500">Color de la cuenta</Text>
+              <View className="mb-4 flex-row flex-wrap gap-3">
+                {["#10b981", "#0ea5e9", "#6366f1", "#f43f5e", "#f59e0b", "#64748b"].map(item => (
+                  <Pressable key={item} onPress={() => setColorCuenta(item)} disabled={loading}
+                    accessibilityLabel={`Elegir color ${item}`}
+                    style={{ backgroundColor: item }}
+                    className="h-9 w-9 items-center justify-center rounded-full">
+                    {colorCuenta === item && <SymbolView name={{ android: "check", web: "check" }} size={19} tintColor="#fff" />}
+                  </Pressable>
+                ))}
+              </View>
+
+              <Pressable onPress={() => {
+                if (editing?.isDefault && esPrincipal) {
+                  Alert.alert("Cuenta principal", "Primero establece otra cuenta como principal si deseas cambiarla.");
+                  return;
+                }
+                setEsPrincipal(value => !value);
+              }} disabled={loading}
+                className="mb-3 flex-row items-center justify-between rounded-2xl bg-slate-100 px-4 py-3.5 dark:bg-slate-800">
+                <Text className="font-manrope-medium text-[13px] text-slate-900 dark:text-white">Cuenta principal</Text>
+                <SymbolView name={{ android: esPrincipal ? "check_circle" : "radio_button_unchecked", web: esPrincipal ? "check_circle" : "radio_button_unchecked" }} size={22} tintColor={esPrincipal ? "#10b981" : "#94a3b8"} />
+              </Pressable>
+              <Pressable onPress={() => setIncluirPatrimonio(value => !value)} disabled={loading}
+                className="mb-4 flex-row items-center justify-between rounded-2xl bg-slate-100 px-4 py-3.5 dark:bg-slate-800">
+                <Text className="font-manrope-medium text-[13px] text-slate-900 dark:text-white">Incluir en patrimonio</Text>
+                <SymbolView name={{ android: incluirPatrimonio ? "check_circle" : "radio_button_unchecked", web: incluirPatrimonio ? "check_circle" : "radio_button_unchecked" }} size={22} tintColor={incluirPatrimonio ? "#10b981" : "#94a3b8"} />
+              </Pressable>
+
               {/* Error general */}
               {serverError && (
                 <View className="mb-4 flex-row items-center gap-2 rounded-2xl bg-rose-50 px-4 py-3 dark:bg-rose-950/30">
@@ -487,7 +548,7 @@ export default function ModalNewAccount({ visible, onClose, onCrear }: Props) {
                   <ActivityIndicator color="#fff" />
                 ) : (
                   <Text className="font-manrope-bold text-[15px] text-white dark:text-slate-900">
-                    Crear cuenta
+                    {editing ? "Guardar cambios" : "Crear cuenta"}
                   </Text>
                 )}
               </Pressable>

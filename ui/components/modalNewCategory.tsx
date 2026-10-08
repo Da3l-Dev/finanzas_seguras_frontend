@@ -1,5 +1,9 @@
 import { useAuth } from "@/context/AuthContext";
-import { ApiError, apiFetch } from "@/lib/api";
+import { ApiError } from "@/lib/api";
+import { useCreateCategory, useUpdateCategory } from "@/hooks/mutations/useFinanceMutations";
+import { getFieldErrors } from "@/lib/queryUtils";
+import type { Category } from "@/hooks/queries/useCategories";
+import { Alert } from "react-native";
 import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -30,7 +34,8 @@ type Props = {
   visible: boolean;
   tipo: TipoCategoria;
   onClose: () => void;
-  onCrear: (categoria: CategoriaCreada) => void;
+  onCrear?: (categoria: CategoriaCreada) => void;
+  editing?: Category | null;
 };
 
 // ═══════════════════════════════════════════════════════════════
@@ -123,6 +128,7 @@ export default function ModalNewCategory({
   tipo: tipoProp,
   onClose,
   onCrear,
+  editing,
 }: Props) {
   const { token } = useAuth();
 
@@ -132,16 +138,21 @@ export default function ModalNewCategory({
     tipoProp === "INCOME" ? "cash" : "cart",
   );
   const [busqueda, setBusqueda] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [color, setColor] = useState<string>(tipoProp === "INCOME" ? "#10b981" : "#f43f5e");
+  const createMutation = useCreateCategory();
+  const updateMutation = useUpdateCategory();
+  const loading = createMutation.isPending || updateMutation.isPending;
   const [serverError, setServerError] = useState<string | null>(null);
 
   // Sincroniza el tipo cuando se abre el modal con otro tipo
   useEffect(() => {
     if (visible) {
-      setTipo(tipoProp);
-      setIcono(tipoProp === "INCOME" ? "cash" : "cart");
+      setTipo(editing?.type ?? tipoProp);
+      setNombre(editing?.name ?? "");
+      setIcono(editing?.icon ?? (tipoProp === "INCOME" ? "cash" : "cart"));
+      setColor(editing?.color ?? (tipoProp === "INCOME" ? "#10b981" : "#f43f5e"));
     }
-  }, [visible, tipoProp]);
+  }, [visible, tipoProp, editing?.id]);
 
   const defaults = tipo === "INCOME" ? DEFAULT_INCOME : DEFAULT_EXPENSE;
 
@@ -161,6 +172,7 @@ export default function ModalNewCategory({
   const reset = () => {
     setNombre("");
     setBusqueda("");
+    setColor(tipo === "INCOME" ? "#10b981" : "#f43f5e");
     setIcono(tipo === "INCOME" ? "cash" : "cart");
     setServerError(null);
   };
@@ -172,8 +184,9 @@ export default function ModalNewCategory({
   };
 
   const handleCambiarTipo = (nuevoTipo: TipoCategoria) => {
-    if (nuevoTipo === tipo) return;
+    if (nuevoTipo === tipo || editing) return;
     setTipo(nuevoTipo);
+    setColor(nuevoTipo === "INCOME" ? "#10b981" : "#f43f5e");
     setIcono(nuevoTipo === "INCOME" ? "cash" : "cart");
     setBusqueda("");
     setServerError(null);
@@ -187,37 +200,26 @@ export default function ModalNewCategory({
     }
 
     setServerError(null);
-    setLoading(true);
+
 
     try {
-      const res = await apiFetch<{
-        status: "ok";
-        data: {
-          id: string;
-          name: string;
-          type: TipoCategoria;
-          icon: string | null;
-          color: string | null;
-        };
-      }>(
-        "/api/category",
-        {
-          method: "POST",
-          body: JSON.stringify({
-            name: nombre.trim(),
-            type: tipo,
-            icon: icono,
-          }),
-        },
-        token,
-      );
+      if (editing) {
+        await updateMutation.mutateAsync({ id: editing.id, changes: { name: nombre.trim(), icon: icono, color } });
+        Alert.alert("Listo", "Categoría actualizada.");
+        reset();
+        onClose();
+        return;
+      }
+      const created = await createMutation.mutateAsync({
+        name: nombre.trim(), type: tipo, icon: icono, color,
+      });
 
-      onCrear({
-        id: res.data.id,
-        name: res.data.name,
-        type: res.data.type,
-        icon: res.data.icon ?? "cart",
-        color: res.data.color,
+      onCrear?.({
+        id: created.id,
+        name: created.name,
+        type: created.type,
+        icon: created.icon ?? "cart",
+        color: created.color,
       });
 
       reset();
@@ -228,15 +230,13 @@ export default function ModalNewCategory({
           errors?: Record<string, string>;
           message?: string;
         } | null;
-        const specific = body?.errors?.name ?? e.message;
+        const specific = getFieldErrors(e).name ?? e.message;
         setServerError(specific);
       } else if (e instanceof Error) {
         setServerError(e.message);
       } else {
         setServerError("No se pudo crear la categoría.");
       }
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -256,17 +256,19 @@ export default function ModalNewCategory({
         <Pressable onPress={(e) => e.stopPropagation()}>
           <SafeAreaView
             edges={["bottom"]}
-            className="rounded-t-[28px] bg-white px-6 pt-6 dark:bg-[#0f172a]"
+            className="rounded-t-[28px] bg-white dark:bg-[#0f172a]"
+            style={{ maxHeight: "90%" }}
           >
+            <ScrollView contentContainerStyle={{ paddingHorizontal: 24, paddingTop: 24, paddingBottom: 18 }} keyboardShouldPersistTaps="handled">
             <View className="mb-4 items-center">
               <View className="h-1 w-10 rounded-full bg-slate-200 dark:bg-slate-700" />
             </View>
 
             <Text className="mb-1 font-manrope-bold text-[18px] text-slate-900 dark:text-white">
-              Nueva categoría
+              {editing ? "Editar categoría" : "Nueva categoría"}
             </Text>
             <Text className="mb-4 font-manrope text-[13px] text-slate-500">
-              Elige el tipo, el nombre y el icono
+              {editing ? "Modifica el nombre, ícono o color" : "Elige el tipo, nombre, ícono y color"}
             </Text>
 
             {/* ─── Toggle Gasto / Ingreso ─────────────── */}
@@ -344,10 +346,23 @@ export default function ModalNewCategory({
               )}
             </View>
 
+            <Text className="mb-2 font-manrope-medium text-[12px] text-slate-500">Color</Text>
+            <View className="mb-4 flex-row flex-wrap gap-3">
+              {["#10b981", "#f43f5e", "#6366f1", "#f59e0b", "#0ea5e9", "#8b5cf6", "#64748b"].map(item => (
+                <Pressable key={item} onPress={() => setColor(item)} disabled={loading}
+                  accessibilityLabel={`Elegir color ${item}`}
+                  className="h-10 w-10 items-center justify-center rounded-full"
+                  style={{ backgroundColor: item }}>
+                  {color === item && <MaterialCommunityIcons name="check" size={23} color="#ffffff" />}
+                </Pressable>
+              ))}
+            </View>
+
             {/* ─── Preview del icono seleccionado ────── */}
             <View className="mb-3 flex-row items-center gap-3 rounded-2xl bg-slate-50 px-4 py-3 dark:bg-slate-800/50">
               <View
-                className={`h-11 w-11 items-center justify-center rounded-full ${accentBg}`}
+                className="h-11 w-11 items-center justify-center rounded-full"
+                style={{ backgroundColor: color }}
               >
                 <MaterialCommunityIcons
                   name={icono as any}
@@ -451,12 +466,13 @@ export default function ModalNewCategory({
                 <ActivityIndicator color="#fff" />
               ) : (
                 <Text className="font-manrope-bold text-[15px] text-white">
-                  Crear {esIngreso ? "ingreso" : "gasto"}
+                  {editing ? "Guardar categoría" : `Crear ${esIngreso ? "ingreso" : "gasto"}`}
                 </Text>
               )}
             </Pressable>
 
             <View className="h-6" />
+            </ScrollView>
           </SafeAreaView>
         </Pressable>
       </Pressable>

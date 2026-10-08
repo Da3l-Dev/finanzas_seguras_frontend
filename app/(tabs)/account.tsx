@@ -1,8 +1,16 @@
 import { useAuth } from "@/context/AuthContext";
-import { ApiError, apiFetch } from "@/lib/api";
+import { useDeleteAccount } from "@/hooks/mutations/useFinanceMutations";
+import {
+  useAccountAnalytics,
+  useAccounts,
+  type Account,
+} from "@/hooks/queries/useAccounts";
+import { confirmAccountDeletion } from "@/lib/deletionConfirm";
+import { getQueryErrorMessage } from "@/lib/queryUtils";
 import ModalNewAccount from "@/ui/components/modalNewAccount";
 import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
-import { useCallback, useEffect, useState } from "react";
+import { router } from "expo-router";
+import { useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -95,127 +103,54 @@ const ICON_FALLBACK_TIPO: Record<string, string> = {
 // Componente
 // ═══════════════════════════════════════════════════════════════
 export default function Accounts() {
-  const { token, isLoading: authLoading } = useAuth();
-  const [data, setData] = useState<Analytics | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { isLoading: authLoading } = useAuth();
+  const {
+    data,
+    isPending: loading,
+    isRefetching: refreshing,
+    error: queryError,
+    refetch,
+  } = useAccountAnalytics();
+  const error = queryError ? getQueryErrorMessage(queryError) : null;
   const [showNuevaCuenta, setShowNuevaCuenta] = useState(false);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
-
-  const cargar = useCallback(
-    async (isRefresh = false) => {
-      if (!token) return;
-      if (isRefresh) setRefreshing(true);
-      else setLoading(true);
-      setError(null);
-
-      try {
-        const res = await apiFetch<{ success: boolean; data: Analytics }>(
-          "/api/account/analytics",
-          { method: "GET" },
-          token,
-        );
-        setData(res.data);
-      } catch (e) {
-        if (e instanceof ApiError) setError(e.message);
-        else if (e instanceof Error) setError(e.message);
-        else setError("No se pudo cargar el análisis.");
-      } finally {
-        setLoading(false);
-        setRefreshing(false);
-      }
-    },
-    [token],
-  );
-
-  useEffect(() => {
-    if (authLoading || !token) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await apiFetch<{ success: boolean; data: Analytics }>(
-          "/api/account/analytics",
-          { method: "GET" },
-          token,
-        );
-        if (!cancelled) setData(res.data);
-      } catch (e) {
-        if (!cancelled) {
-          if (e instanceof ApiError) setError(e.message);
-          else if (e instanceof Error) setError(e.message);
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [token, authLoading]);
-
+  const deleteAccount = useDeleteAccount();
+  const allAccounts = useAccounts();
+  const [editingAccount, setEditingAccount] = useState<Account | null>(null);
+  const cargar = (_isRefresh?: boolean) => {
+    void refetch();
+  };
   const handleCuentaCreada = () => {
-    cargar(true);
+    /* La invalidación la realiza React Query. */
   };
 
-  // ─── Eliminar cuenta ───────────────────────────
-  const confirmarEliminar = (cuenta: AccountMetric) => {
-    const esDeuda = cuenta.currentBalance < 0;
-    const saldoTexto = esDeuda
-      ? `deuda de $${formatMXN(Math.abs(cuenta.currentBalance))}`
-      : `saldo de $${formatMXN(cuenta.currentBalance)}`;
-
-    Alert.alert(
-      "Eliminar cuenta",
-      `¿Seguro que quieres eliminar "${cuenta.name}"? Tiene un ${saldoTexto} y ${cuenta.txCount6m} ${
-        cuenta.txCount6m === 1 ? "movimiento" : "movimientos"
-      } en los últimos 6 meses.\n\nLos movimientos no se borrarán, solo dejarás de ver la cuenta en tu lista.`,
-      [
-        { text: "Cancelar", style: "cancel" },
-        {
-          text: "Eliminar",
-          style: "destructive",
-          onPress: () => eliminarCuenta(cuenta.id),
-        },
-      ],
-      { cancelable: true },
-    );
-  };
-
-  const eliminarCuenta = async (id: string) => {
-    if (!token || deletingId) return;
-    setDeletingId(id);
-    try {
-      await apiFetch(`/api/account/${id}`, { method: "DELETE" }, token);
-      // Refrescar analytics desde el backend
-      await cargar(true);
-    } catch (e) {
-      const msg =
-        e instanceof ApiError
-          ? e.message
-          : e instanceof Error
-            ? e.message
-            : "No se pudo eliminar la cuenta";
-      Alert.alert("Error", msg);
-    } finally {
-      setDeletingId(null);
+  const editarCuenta = (cuenta: AccountMetric) => {
+    const full = allAccounts.data?.find((a) => a.id === cuenta.id);
+    if (!full) {
+      Alert.alert(
+        "Cargando cuenta",
+        "Todavía estamos obteniendo los datos. Vuelve a intentar.",
+      );
+      void allAccounts.refetch();
+      return;
     }
+    setEditingAccount(full);
+    setShowNuevaCuenta(true);
+  };
+
+  const confirmarEliminar = (cuenta: AccountMetric) => {
+    confirmAccountDeletion(cuenta.name, deleteAccount.mutateAsync, cuenta.id);
   };
 
   const abrirMenuCuenta = (cuenta: AccountMetric) => {
-    Alert.alert(
-      cuenta.name,
-      `${LABEL_TIPO[cuenta.type] ?? cuenta.type}`,
-      [
-        { text: "Cancelar", style: "cancel" },
-        {
-          text: "Eliminar cuenta",
-          style: "destructive",
-          onPress: () => confirmarEliminar(cuenta),
-        },
-      ],
-      { cancelable: true },
-    );
+    Alert.alert(cuenta.name, LABEL_TIPO[cuenta.type] ?? cuenta.type, [
+      { text: "Cancelar", style: "cancel" },
+      { text: "Editar", onPress: () => editarCuenta(cuenta) },
+      {
+        text: "Eliminar de la base de datos",
+        style: "destructive",
+        onPress: () => confirmarEliminar(cuenta),
+      },
+    ]);
   };
 
   // Loading inicial
@@ -236,7 +171,18 @@ export default function Accounts() {
             Cuentas
           </Text>
           <Pressable
-            onPress={() => setShowNuevaCuenta(true)}
+            onPress={() => router.push("/accounts-archived")}
+            className="ml-auto mr-3 rounded-xl bg-slate-100 px-3 py-2 dark:bg-slate-800"
+          >
+            <Text className="font-manrope-bold text-[12px] text-slate-600 dark:text-white">
+              Archivadas
+            </Text>
+          </Pressable>
+          <Pressable
+            onPress={() => {
+              setEditingAccount(null);
+              setShowNuevaCuenta(true);
+            }}
             hitSlop={10}
             className="h-9 w-9 items-center justify-center rounded-full bg-white dark:bg-[#0f172a]"
           >
@@ -272,8 +218,12 @@ export default function Accounts() {
 
         <ModalNewAccount
           visible={showNuevaCuenta}
-          onClose={() => setShowNuevaCuenta(false)}
+          onClose={() => {
+            setShowNuevaCuenta(false);
+            setEditingAccount(null);
+          }}
           onCrear={handleCuentaCreada}
+          editing={editingAccount}
         />
       </SafeAreaView>
     );
@@ -304,7 +254,18 @@ export default function Accounts() {
             Cuentas
           </Text>
           <Pressable
-            onPress={() => setShowNuevaCuenta(true)}
+            onPress={() => router.push("/accounts-archived")}
+            className="ml-auto mr-3 rounded-xl bg-slate-100 px-3 py-2 dark:bg-slate-800"
+          >
+            <Text className="font-manrope-bold text-[12px] text-slate-600 dark:text-white">
+              Archivadas
+            </Text>
+          </Pressable>
+          <Pressable
+            onPress={() => {
+              setEditingAccount(null);
+              setShowNuevaCuenta(true);
+            }}
             hitSlop={10}
             className="h-9 w-9 items-center justify-center rounded-full bg-white dark:bg-[#0f172a]"
           >
@@ -327,18 +288,6 @@ export default function Accounts() {
         )}
 
         {/* Aviso si solo queda una cuenta */}
-        {soloUnaCuenta && (
-          <View className="mx-5 mb-3 flex-row items-center gap-2 rounded-2xl bg-amber-50 px-4 py-3 dark:bg-amber-950/30">
-            <MaterialCommunityIcons
-              name="information-outline"
-              size={16}
-              color="#f59e0b"
-            />
-            <Text className="flex-1 font-manrope text-[12px] text-amber-700 dark:text-amber-400">
-              Necesitas al menos una cuenta activa para registrar movimientos.
-            </Text>
-          </View>
-        )}
 
         {/* Patrimonio */}
         <View className="mx-5 rounded-3xl bg-white p-5 dark:bg-[#0f172a]">
@@ -511,21 +460,21 @@ export default function Accounts() {
               esCredito && cuenta.creditLimit
                 ? Math.min(100, (used / cuenta.creditLimit) * 100)
                 : null;
-            const isDeleting = deletingId === cuenta.id;
-            const canDelete = !soloUnaCuenta;
+            const isDeleting =
+              deleteAccount.isPending &&
+              deleteAccount.variables?.id === cuenta.id;
 
             return (
-              <Pressable
+              <View
                 key={cuenta.id}
-                onLongPress={() => abrirMenuCuenta(cuenta)}
-                delayLongPress={400}
-                disabled={isDeleting}
                 className={`rounded-3xl bg-white p-4 dark:bg-[#0f172a] ${
                   isDeleting ? "opacity-50" : ""
                 }`}
               >
+                {/* ── Fila 1: info + saldo + menú ── */}
                 <View className="flex-row items-center justify-between">
-                  <View className="flex-row items-center gap-3">
+                  {/* Izquierda: icono + nombre */}
+                  <View className="mr-3 flex-1 flex-row items-center gap-3">
                     <View
                       style={{ backgroundColor: `${color}20` }}
                       className="h-10 w-10 items-center justify-center rounded-full"
@@ -540,44 +489,47 @@ export default function Accounts() {
                         color={color}
                       />
                     </View>
-                    <View>
-                      <Text className="font-manrope-bold text-[15px] text-slate-900 dark:text-white">
+                    <View className="flex-1">
+                      <Text
+                        numberOfLines={1}
+                        className="font-manrope-bold text-[15px] text-slate-900 dark:text-white"
+                      >
                         {cuenta.name}
                       </Text>
-                      <Text className="font-manrope text-[11px] text-slate-400">
+                      <Text
+                        numberOfLines={1}
+                        className="font-manrope text-[11px] text-slate-400"
+                      >
                         {LABEL_TIPO[cuenta.type] ?? cuenta.type}
                         {cuenta.isDefault && " · principal"}
                       </Text>
                     </View>
                   </View>
 
-                  <View className="flex-row items-center gap-2">
-                    <View className="items-end">
-                      <Text
-                        className={`font-manrope-bold text-[16px] ${
-                          esDeuda
-                            ? "text-rose-500"
-                            : "text-slate-900 dark:text-white"
-                        }`}
-                      >
-                        {esDeuda ? "-" : ""}$
-                        {formatMXN(Math.abs(cuenta.currentBalance))}
-                      </Text>
-                      {esCredito && pctUsed !== null && (
-                        <Text className="font-manrope text-[11px] text-slate-400">
-                          {pctUsed.toFixed(0)}% del límite
-                        </Text>
-                      )}
-                    </View>
+                  {/* Derecha: saldo + menú */}
+                  <View className="flex-row items-center gap-1">
+                    <Text
+                      className={`font-manrope-bold text-[16px] ${
+                        esDeuda
+                          ? "text-rose-500"
+                          : "text-slate-900 dark:text-white"
+                      }`}
+                    >
+                      {esDeuda ? "-" : ""}$
+                      {formatMXN(Math.abs(cuenta.currentBalance))}
+                    </Text>
 
-                    {/* Menú de opciones */}
                     {isDeleting ? (
-                      <ActivityIndicator color="#e11d48" size="small" />
+                      <ActivityIndicator
+                        color="#e11d48"
+                        size="small"
+                        style={{ marginLeft: 6 }}
+                      />
                     ) : (
                       <Pressable
                         onPress={() => abrirMenuCuenta(cuenta)}
                         hitSlop={10}
-                        className="h-8 w-8 items-center justify-center"
+                        className="ml-1 h-8 w-8 items-center justify-center"
                       >
                         <MaterialCommunityIcons
                           name="dots-vertical"
@@ -589,8 +541,19 @@ export default function Accounts() {
                   </View>
                 </View>
 
+                {/* ── Barra de crédito (si aplica) ── */}
                 {esCredito && pctUsed !== null && (
                   <View className="mt-3">
+                    <View className="mb-1 flex-row items-center justify-between">
+                      <Text className="font-manrope text-[11px] text-slate-400">
+                        {pctUsed.toFixed(0)}% del límite usado
+                      </Text>
+                      {cuenta.creditLimit && (
+                        <Text className="font-manrope text-[11px] text-slate-400">
+                          Límite ${formatMXN(cuenta.creditLimit)}
+                        </Text>
+                      )}
+                    </View>
                     <View className="h-1.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
                       <View
                         className="h-full rounded-full"
@@ -612,7 +575,7 @@ export default function Accounts() {
                           size={14}
                           color="#e11d48"
                         />
-                        <Text className="font-manrope-medium text-[11px] text-rose-600 dark:text-rose-400">
+                        <Text className="flex-1 font-manrope-medium text-[11px] text-rose-600 dark:text-rose-400">
                           Cuidado, usaste más del 70% de tu crédito
                         </Text>
                       </View>
@@ -620,8 +583,43 @@ export default function Accounts() {
                   </View>
                 )}
 
-                <View className="mt-4 flex-row gap-3 border-t border-slate-100 pt-3 dark:border-slate-800">
-                  <View className="flex-1">
+                {/* ── Divisor ── */}
+                <View className="my-3 h-[1px] bg-slate-100 dark:bg-slate-800" />
+
+                {/* ── Botones Editar / Eliminar (fila propia, full width) ── */}
+                <View className="flex-row gap-2">
+                  <Pressable
+                    onPress={() => editarCuenta(cuenta)}
+                    className="flex-1 flex-row items-center justify-center gap-2 rounded-xl bg-slate-100 py-2.5 dark:bg-slate-800"
+                  >
+                    <MaterialCommunityIcons
+                      name="pencil-outline"
+                      size={16}
+                      color="#10b981"
+                    />
+                    <Text className="font-manrope-bold text-[12px] text-slate-700 dark:text-white">
+                      Editar
+                    </Text>
+                  </Pressable>
+
+                  <Pressable
+                    onPress={() => confirmarEliminar(cuenta)}
+                    className="flex-1 flex-row items-center justify-center gap-2 rounded-xl bg-rose-50 py-2.5 dark:bg-rose-950/30"
+                  >
+                    <MaterialCommunityIcons
+                      name="delete-outline"
+                      size={16}
+                      color="#e11d48"
+                    />
+                    <Text className="font-manrope-bold text-[12px] text-rose-600">
+                      Eliminar
+                    </Text>
+                  </Pressable>
+                </View>
+
+                {/* ── Métricas rápidas ── */}
+                <View className="mt-3 w-full flex-row justify-evenly">
+                  <View className="items-center">
                     <Text className="font-manrope text-[10px] uppercase tracking-wide text-slate-400">
                       Gasto/mes
                     </Text>
@@ -629,7 +627,7 @@ export default function Accounts() {
                       ${formatMXN(cuenta.monthlyAvg)}
                     </Text>
                   </View>
-                  <View className="flex-1">
+                  <View className="items-center">
                     <Text className="font-manrope text-[10px] uppercase tracking-wide text-slate-400">
                       Promedio
                     </Text>
@@ -637,7 +635,7 @@ export default function Accounts() {
                       ${formatMXN(cuenta.avgTx)}
                     </Text>
                   </View>
-                  <View className="flex-1">
+                  <View className="items-center">
                     <Text className="font-manrope text-[10px] uppercase tracking-wide text-slate-400">
                       Usos
                     </Text>
@@ -657,7 +655,7 @@ export default function Accounts() {
                     })}
                   </Text>
                 )}
-              </Pressable>
+              </View>
             );
           })}
         </View>
@@ -665,8 +663,12 @@ export default function Accounts() {
 
       <ModalNewAccount
         visible={showNuevaCuenta}
-        onClose={() => setShowNuevaCuenta(false)}
+        onClose={() => {
+          setShowNuevaCuenta(false);
+          setEditingAccount(null);
+        }}
         onCrear={handleCuentaCreada}
+        editing={editingAccount}
       />
     </SafeAreaView>
   );

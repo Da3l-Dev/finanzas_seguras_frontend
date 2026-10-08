@@ -1,10 +1,19 @@
 import { useAuth } from "@/context/AuthContext";
-import { ApiError, apiFetch } from "@/lib/api";
+import {
+  useCreateTransaction,
+  useUpdateTransaction,
+} from "@/hooks/mutations/useFinanceMutations";
+import { useAccounts } from "@/hooks/queries/useAccounts";
+import { useCategories } from "@/hooks/queries/useCategories";
+import type { EditingTransaction } from "@/hooks/useTransactionForm";
+import { ApiError } from "@/lib/api";
+import { toIconName } from "@/lib/icons";
+import { getFieldErrors } from "@/lib/queryUtils";
 import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
-import { SymbolView } from "expo-symbols";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -46,95 +55,19 @@ type CuentaUI = {
 type Props = {
   modalVisible: boolean;
   onClose: () => void;
-  onCreated?: () => void;
+  editing?: EditingTransaction | null;
 };
 
-const ICON_CATEGORY_FALLBACK = "cart";
 const ICON_ACCOUNT = {
   android: "account_balance_wallet",
   web: "account_balance_wallet",
 };
-
-// ═══════════════════════════════════════════════════════════════
-// Alias de iconos
-// ═══════════════════════════════════════════════════════════════
-const ICON_ALIASES: Record<string, string> = {
-  restaurant: "food",
-  shopping_cart: "cart",
-  local_gas_station: "gas-station",
-  home: "home",
-  directions_car: "car",
-  movie: "movie-open",
-  medical_services: "medical-bag",
-  pets: "paw",
-  fitness_center: "dumbbell",
-  school: "school",
-  work: "briefcase",
-  laptop_mac: "laptop",
-  replay: "backup-restore",
-  card_giftcard: "gift",
-  trending_up: "trending-up",
-  savings: "piggy-bank",
-  category: "shape",
-  account_balance_wallet: "wallet",
-  add: "plus",
-  error: "alert-circle",
-  edit_note: "note-edit",
-  payments: "cash",
-  credit_card: "credit-card",
-};
-
-const GLYPH_MAP = MaterialCommunityIcons.glyphMap as Record<string, number>;
-function isValidIcon(name: string): boolean {
-  return Object.prototype.hasOwnProperty.call(GLYPH_MAP, name);
-}
-
-function toCategoryIconName(
-  raw: unknown,
-  fallback: string = ICON_CATEGORY_FALLBACK,
-): string {
-  if (!raw) return fallback;
-  let candidate = "";
-  if (typeof raw === "object" && raw !== null) {
-    const obj = raw as { android?: string; web?: string };
-    candidate = obj.android ?? obj.web ?? "";
-  } else if (typeof raw === "string") {
-    try {
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === "object") {
-        candidate =
-          (parsed as { android?: string }).android ??
-          (parsed as { web?: string }).web ??
-          "";
-      } else {
-        candidate = raw;
-      }
-    } catch {
-      candidate = raw;
-    }
-  }
-  candidate = candidate.trim();
-  if (!candidate) return fallback;
-  const aliased = ICON_ALIASES[candidate] ?? candidate;
-  if (isValidIcon(aliased)) return aliased;
-  const dashed = aliased.replace(/_/g, "-");
-  if (isValidIcon(dashed)) return dashed;
-  return fallback;
-}
 
 function mapAccountIcon(
   raw: string | null | undefined,
   fallback: { android: string; web: string },
 ): { android: string; web: string } {
   if (!raw) return fallback;
-  try {
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === "object" && parsed.android && parsed.web) {
-      return parsed;
-    }
-  } catch {
-    // no era JSON
-  }
   return { android: raw, web: raw };
 }
 
@@ -150,7 +83,7 @@ const formatMXN = (n: number) =>
 export default function ModalCreateFinances({
   modalVisible,
   onClose,
-  onCreated,
+  editing,
 }: Props) {
   const { token } = useAuth();
 
@@ -160,112 +93,65 @@ export default function ModalCreateFinances({
   const [cuentaId, setCuentaId] = useState<string | null>(null);
   const [nota, setNota] = useState("");
 
-  const [categorias, setCategorias] = useState<CategoriaUI[]>([]);
-  const [cuentas, setCuentas] = useState<CuentaUI[]>([]);
+  const accountsQuery = useAccounts();
+  const categoriesQuery = useCategories(tipo);
+  const createTransaction = useCreateTransaction();
+  const updateTransaction = useUpdateTransaction();
 
-  const [loadingCategorias, setLoadingCategorias] = useState(false);
-  const [loadingCuentas, setLoadingCuentas] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const cuentas: CuentaUI[] = (accountsQuery.data ?? []).map((a) => ({
+    id: a.id,
+    name: a.name,
+    type: a.type,
+    icon: mapAccountIcon(a.icon, ICON_ACCOUNT),
+    currentBalance: a.currentBalance,
+    openingBalance: a.openingBalance,
+    creditLimit: a.creditLimit,
+    creditAvailable: a.creditAvailable,
+  }));
+
+  const categorias: CategoriaUI[] = (categoriesQuery.data ?? []).map((c) => ({
+    id: c.id,
+    name: c.name,
+    type: c.type,
+    icon: toIconName(c.icon),
+    color: c.color,
+  }));
+
+  const loadingCuentas = accountsQuery.isPending;
+  const loadingCategorias = categoriesQuery.isPending;
+  const saving = createTransaction.isPending || updateTransaction.isPending;
   const [error, setError] = useState<string | null>(null);
-
   const [showNuevaCategoria, setShowNuevaCategoria] = useState(false);
   const [showNuevaCuenta, setShowNuevaCuenta] = useState(false);
 
-  // ============ Cargar cuentas ============
-  const cargarCuentas = useCallback(async () => {
-    if (!token) return;
-    setLoadingCuentas(true);
-    try {
-      const res = await apiFetch<{
-        success: boolean;
-        data: Array<{
-          id: string;
-          name: string;
-          type: string;
-          icon: string | null;
-          isDefault: boolean;
-          currentBalance?: number;
-          openingBalance?: number;
-          creditLimit: number | null;
-          creditAvailable: number | null;
-        }>;
-      }>("/api/account", { method: "GET" }, token);
-
-      const mapped: CuentaUI[] = (res.data ?? []).map((a) => {
-        const opening = a.openingBalance ?? 0;
-        const current = a.currentBalance ?? opening;
-        return {
-          id: a.id,
-          name: a.name,
-          type: a.type,
-          icon: mapAccountIcon(a.icon, ICON_ACCOUNT),
-          currentBalance: current,
-          openingBalance: opening,
-          creditLimit: a.creditLimit ?? null,
-          creditAvailable: a.creditAvailable ?? null,
-        };
-      });
-
-      setCuentas(mapped);
-
-      if (!cuentaId && mapped.length > 0) {
-        const def = (res.data ?? []).find((a) => a.isDefault);
-        setCuentaId(def?.id ?? mapped[0].id);
-      }
-    } catch (e) {
-      console.warn("[ModalCreate] Error cuentas:", e);
-      setError("No se pudieron cargar las cuentas.");
-    } finally {
-      setLoadingCuentas(false);
+  useEffect(() => {
+    if (!modalVisible || !cuentas.length) return;
+    if (!cuentas.some((c) => c.id === cuentaId)) {
+      const def = accountsQuery.data?.find((a) => a.isDefault);
+      setCuentaId(def?.id ?? cuentas[0].id);
     }
-  }, [token, cuentaId]);
-
-  // ============ Cargar categorías ============
-  const cargarCategorias = useCallback(
-    async (tipoActual: TipoTransaccion) => {
-      if (!token) return;
-      setLoadingCategorias(true);
-      try {
-        const res = await apiFetch<{
-          status: "ok";
-          data: Array<{
-            id: string;
-            name: string;
-            type: TipoTransaccion;
-            icon: string | null;
-            color: string | null;
-          }>;
-        }>(`/api/category/${tipoActual}`, { method: "GET" }, token);
-
-        const mapped: CategoriaUI[] = (res.data ?? []).map((c) => ({
-          id: c.id,
-          name: c.name,
-          type: c.type,
-          icon: toCategoryIconName(c.icon),
-          color: c.color ?? null,
-        }));
-
-        setCategorias(mapped);
-      } catch (e) {
-        console.warn("[ModalCreate] Error categorías:", e);
-        setError("No se pudieron cargar las categorías.");
-      } finally {
-        setLoadingCategorias(false);
-      }
-    },
-    [token],
-  );
+  }, [modalVisible, cuentaId, accountsQuery.data, cuentas]);
 
   useEffect(() => {
-    if (!modalVisible || !token) return;
-    cargarCuentas();
-  }, [modalVisible, token, cargarCuentas]);
+    if (!modalVisible) return;
+    if (editing) {
+      setTipo(editing.type);
+      setMonto(String(editing.amount));
+      setCategoriaId(editing.categoryId);
+      setCuentaId(editing.sourceAccountId);
+      setNota(editing.description ?? "");
+    } else {
+      setTipo("EXPENSE");
+      setMonto("");
+      setCategoriaId(null);
+      setNota("");
+    }
+    setError(null);
+  }, [modalVisible, editing?.id]);
 
   useEffect(() => {
-    if (!modalVisible || !token) return;
-    setCategoriaId(null);
-    cargarCategorias(tipo);
-  }, [modalVisible, tipo, token, cargarCategorias]);
+    if (!editing) setCategoriaId(null);
+  }, [tipo, editing]);
 
   // ═══════════════════════════════════════════════════════════════
   // Validación de saldo
@@ -286,13 +172,13 @@ export default function ModalCreateFinances({
     return Math.max(0, cuentaSeleccionada.currentBalance);
   }, [cuentaSeleccionada]);
 
-  // Exceso de gasto (solo aplica a EXPENSE)
+  // Exceso de gasto (solo aplica a EXPENSE, no al editar)
   const excedeSaldo = useMemo(() => {
-    if (tipo !== "EXPENSE") return false;
+    if (tipo !== "EXPENSE" || editing) return false;
     if (!cuentaSeleccionada) return false;
     if (saldoDisponible === null) return false;
     return montoNum > saldoDisponible;
-  }, [tipo, cuentaSeleccionada, saldoDisponible, montoNum]);
+  }, [tipo, editing, cuentaSeleccionada, saldoDisponible, montoNum]);
 
   const faltante =
     excedeSaldo && saldoDisponible !== null ? montoNum - saldoDisponible : 0;
@@ -341,39 +227,39 @@ export default function ModalCreateFinances({
     }
 
     setError(null);
-    setSaving(true);
 
     try {
-      await apiFetch(
-        "/api/transactions",
-        {
-          method: "POST",
-          body: JSON.stringify({
-            type: tipo,
-            amount: montoNum,
-            categoryId: categoriaId,
-            sourceAccountId: cuentaId,
-            description: nota.trim() || undefined,
-            occurredAt: new Date().toISOString(),
-          }),
-        },
-        token,
+      const payload = {
+        type: tipo,
+        amount: montoNum,
+        categoryId: categoriaId,
+        sourceAccountId: cuentaId,
+        description: nota.trim() || undefined,
+        occurredAt: editing?.occurredAt ?? new Date().toISOString(),
+      };
+      if (editing) {
+        await updateTransaction.mutateAsync({
+          id: editing.id,
+          changes: payload,
+        });
+      } else {
+        await createTransaction.mutateAsync(payload);
+      }
+      Alert.alert(
+        "Listo",
+        editing ? "Movimiento actualizado." : "Movimiento registrado.",
       );
-
-      onCreated?.();
       resetForm();
       onClose();
     } catch (e) {
       if (e instanceof ApiError) {
-        const body = e.body as { errors?: Record<string, string> } | null;
-        setError(body?.errors?.amount ?? body?.errors?.categoryId ?? e.message);
+        const fields = getFieldErrors(e);
+        setError(fields.amount ?? fields.categoryId ?? e.message);
       } else if (e instanceof Error) {
         setError(e.message);
       } else {
         setError("No se pudo guardar la transacción.");
       }
-    } finally {
-      setSaving(false);
     }
   };
 
@@ -389,7 +275,7 @@ export default function ModalCreateFinances({
       id: nueva.id,
       name: nueva.name,
       type: nueva.type,
-      icon: toCategoryIconName(nueva.icon),
+      icon: toIconName(nueva.icon),
       color: nueva.color ?? null,
     };
 
@@ -400,10 +286,8 @@ export default function ModalCreateFinances({
       return;
     }
 
-    setCategorias((prev) => [...prev, mapped]);
     setCategoriaId(mapped.id);
     setShowNuevaCategoria(false);
-    cargarCategorias(tipo);
   };
 
   // ============ Crear cuenta ============
@@ -426,10 +310,9 @@ export default function ModalCreateFinances({
       creditLimit: null,
       creditAvailable: null,
     };
-    setCuentas((prev) => [...prev, mapped]);
+
     setCuentaId(mapped.id);
     setShowNuevaCuenta(false);
-    cargarCuentas();
   };
 
   const esIngreso = tipo === "INCOME";
@@ -741,10 +624,14 @@ export default function ModalCreateFinances({
                         }`}
                       >
                         <View className="flex-row items-center gap-2">
-                          <SymbolView
-                            name={cuenta.icon as any}
+                          <MaterialCommunityIcons
+                            name={
+                              (Platform.OS === "android"
+                                ? cuenta.icon.android
+                                : cuenta.icon.web) as any
+                            }
                             size={14}
-                            tintColor={activa ? "#fff" : "#64748b"}
+                            color={activa ? "#fff" : "#64748b"}
                           />
                           <Text
                             className={`font-manrope-bold text-[13px] ${
@@ -834,7 +721,9 @@ export default function ModalCreateFinances({
                   <ActivityIndicator color="#fff" />
                 ) : (
                   <Text className="font-manrope-bold text-[16px] text-white">
-                    Guardar {esIngreso ? "ingreso" : "gasto"}
+                    {editing
+                      ? "Guardar cambios"
+                      : `Guardar ${esIngreso ? "ingreso" : "gasto"}`}
                   </Text>
                 )}
               </Pressable>
